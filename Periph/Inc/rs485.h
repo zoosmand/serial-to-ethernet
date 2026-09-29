@@ -40,4 +40,27 @@ Platform_StatusTypeDef Rs485_Init(void);
   */
 Platform_StatusTypeDef Rs485_Transmit(const uint8_t* data, size_t length);
 
+/**
+  * @brief Copy bytes received from the RS485 bus without blocking.
+  * @param data (uint8_t*) Destination buffer; must not be null.
+  * @param capacity (size_t) Maximum bytes to copy.
+  * @retval (size_t) Number of bytes copied in arrival order.
+  */
+size_t Rs485_Read(uint8_t* data, size_t capacity);
+
+typedef struct {
+  uint32_t receivedBytes;
+  uint32_t droppedBytes;
+  uint32_t overrunErrors;
+  uint32_t framingErrors;
+  uint32_t noiseErrors;
+  uint32_t parityErrors;
+} Rs485_StatisticsTypeDef;
+
+/** @brief Read a consistent snapshot of the receive counters. */
+void Rs485_GetStatistics(Rs485_StatisticsTypeDef* statistics);
+
+/** @brief USART2 interrupt entry point used by the platform vector table. */
+void Rs485_IRQHandler(void);
+
 #endif /* RS485_H */

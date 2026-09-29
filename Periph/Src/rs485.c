@@ -25,8 +25,14 @@
 #define RS485_TIMEOUT_MS     1000U
 #define RS485_USART_CLOCK_HZ 42000000UL
 #define RS485_BAUD_RATE      115200UL
+#define RS485_RX_CAPACITY    512U
+#define RS485_RX_INDEX_MASK  (RS485_RX_CAPACITY - 1U)
 
 static uint8_t rs485Initialized;
+static uint8_t rs485RxBuffer[RS485_RX_CAPACITY];
+static volatile uint16_t rs485RxHead;
+static volatile uint16_t rs485RxTail;
+static volatile Rs485_StatisticsTypeDef rs485Statistics;
 
 Platform_StatusTypeDef Rs485_Init(void) {
   RCC->AHB1ENR |= RCC_AHB1ENR_GPIODEN;
@@ -47,7 +53,13 @@ Platform_StatusTypeDef Rs485_Init(void) {
   );
   USART2->BRR = (RS485_USART_CLOCK_HZ + (RS485_BAUD_RATE / 2U))
     / RS485_BAUD_RATE;
-  USART2->CR1 = USART_CR1_TE | USART_CR1_RE | USART_CR1_UE;
+  rs485RxHead = 0U;
+  rs485RxTail = 0U;
+  rs485Statistics = (Rs485_StatisticsTypeDef){0};
+  NVIC_SetPriority(USART2_IRQn, 6U);
+  NVIC_EnableIRQ(USART2_IRQn);
+  USART2->CR3 = USART_CR3_EIE;
+  USART2->CR1 = USART_CR1_TE | USART_CR1_RE | USART_CR1_RXNEIE | USART_CR1_UE;
   rs485Initialized = 1U;
   return PLATFORM_STATUS_OK;
 }
@@ -83,4 +95,61 @@ Platform_StatusTypeDef Rs485_Transmit(const uint8_t* data, size_t length) {
   Platform_GpioWrite(RS485_DIRECTION_PORT, RS485_DIRECTION_PIN, 0U);
 
   return status;
+}
+
+size_t Rs485_Read(uint8_t* data, size_t capacity) {
+  if ((rs485Initialized == 0U) || (data == NULL))
+    return 0U;
+
+  size_t copied = 0U;
+  while ((copied < capacity) && (rs485RxTail != rs485RxHead)) {
+    data[copied++] = rs485RxBuffer[rs485RxTail];
+    rs485RxTail = (uint16_t)((rs485RxTail + 1U) & RS485_RX_INDEX_MASK);
+  }
+  return copied;
+}
+
+void Rs485_GetStatistics(Rs485_StatisticsTypeDef* statistics) {
+  if (statistics == NULL)
+    return;
+
+  uint32_t interruptState = __get_PRIMASK();
+  __disable_irq();
+  statistics->receivedBytes = rs485Statistics.receivedBytes;
+  statistics->droppedBytes = rs485Statistics.droppedBytes;
+  statistics->overrunErrors = rs485Statistics.overrunErrors;
+  statistics->framingErrors = rs485Statistics.framingErrors;
+  statistics->noiseErrors = rs485Statistics.noiseErrors;
+  statistics->parityErrors = rs485Statistics.parityErrors;
+  if (interruptState == 0U)
+    __enable_irq();
+}
+
+void Rs485_IRQHandler(void) {
+  uint32_t status = USART2->SR;
+  const uint32_t errorMask = USART_SR_ORE | USART_SR_FE
+    | USART_SR_NE | USART_SR_PE;
+
+  if ((status & USART_SR_ORE) != 0U)
+    ++rs485Statistics.overrunErrors;
+  if ((status & USART_SR_FE) != 0U)
+    ++rs485Statistics.framingErrors;
+  if ((status & USART_SR_NE) != 0U)
+    ++rs485Statistics.noiseErrors;
+  if ((status & USART_SR_PE) != 0U)
+    ++rs485Statistics.parityErrors;
+
+  if ((status & (USART_SR_RXNE | errorMask)) != 0U) {
+    uint8_t value = (uint8_t)USART2->DR;
+    if (((status & USART_SR_RXNE) != 0U) && ((status & errorMask) == 0U)) {
+      uint16_t next = (uint16_t)((rs485RxHead + 1U) & RS485_RX_INDEX_MASK);
+      if (next == rs485RxTail) {
+        ++rs485Statistics.droppedBytes;
+      } else {
+        rs485RxBuffer[rs485RxHead] = value;
+        rs485RxHead = next;
+        ++rs485Statistics.receivedBytes;
+      }
+    }
+  }
 }
