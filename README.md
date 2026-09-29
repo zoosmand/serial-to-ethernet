@@ -1,4 +1,4 @@
-# STM32F407 Serial To Ethernet
+# STM32F407 Bidirectional Serial-Ethernet Controller
 
 
 ---
